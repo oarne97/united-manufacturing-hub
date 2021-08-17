@@ -7,36 +7,37 @@ description: >
   This section explains how the United Manufacturing Hub is used practically 
 ---
 
-## 1. Extract data using factorycube-edge
+# Prologue: What do you want to implement?
 
-**The basic approach for data processing on the local hardware is to extract data from various data sources (OPC/UA, MQTT, Rest), extract the important information, and then make it available to the United Manufacturing Hub via a predefined interface (MQTT). For this data processing on the local hardware we use Nodered.**
+Before you start, you should think about **what** data you want to collect, **how** you want to do it and **why**.
+Do you want to make individual process values available to a higher-level information system (temperature, vibration strength, distances, switching states, etc.) or do you want to determine the status of a machine (when is the machine running, when is it not and if it is not, why is it not) or do you want to collect product-related information to form a digital shadow. Many roads lead to Rome, the important thing here is to choose the use case first and then the appropriate tools.
 
-To extract and pre-process the data from different data sources we use the open source software node-red. node-red is a low-code programming for event-driven applications.
+In the following, we will describe how you can determine the status of a machine and transmit individual process values with the help of the United Manufacturing Hub.
 
-If you haven't worked with node-red yet, [here](https://nodered.org/docs/user-guide/) is a good documentation from node-red!
+# Prerequisites:
 
-{{< imgproc nodered Fit "800x800" >}}{{< /imgproc >}}
+To use this guide, you should meet the following requirements:
 
-[Here you can download the flow](/examples/nodered/standard_flow.json)
+**General**:
+- Connection to the Edge PC and the Node-RED instance running on it (accessible under the IP address of the Edge PC port 1880).
+- Connection to the edge PC and the MQTT broker instance running on it (accessible under the IP address of the edge PC port 1883).
+- For a retrofit: Connected sensors
+- When connecting a PLC: Connected PLC
 
-### General Configuration
+**Software necessary**: 
+- MQTT Explorer to view messages in real time: http://mqtt-explorer.com/ 
+- Factorycube-edge and Factorycube-server fully installed and configured.
 
-{{< imgproc nodered_general Fit "800x800" >}}{{< /imgproc >}}
+**Software optional**:
+- UA Expert to read OPC/UA interfaces: https://www.unified-automation.com/de/downloads/opc-ua-clients.html 
 
-Basically, 3 pieces of information must be communicated to the system. For more information feel free to check [this article](../../concepts/mqtt/). These 3 information must be set to the system via the green configuration node-red, so that the data can be assigned exactly to an asset
+# Inputs
 
-The customer ID to be assigned to the asset: *customerID*
+In order to transmit information to the United Manufacturing Hub, the data points must first be extracted from various data sources. To do this, you should first familiarise yourself with Node-RED, as we will use this programme in the following to connect various data sources. If you haven't worked with node-red yet, [here](https://nodered.org/docs/user-guide/) is a good documentation.
 
-The location where the asset is located: *location*
+## Node-RED data sources/nodes 
+Node-RED provides so-called nodes directly or via plugins that allow the user to connect various data sources:
 
-The name of the asset: *AssetID*
-
-Furthermore, you will find under the general settings, the state logic which determines the machine *state* with the help of the *activity* and *detectedAnomaly* topic. For more information feel free to check [this article.](../../concepts/mqtt/)
-
-### Inputs:
-{{< imgproc nodered_inputs Fit "800x800" >}}{{< /imgproc >}}
-
-**With the help of the inputs you can tap different data sources. Like for example:**
 - OPC/UA ([documentation for this node](https://flows.nodered.org/node/node-red-contrib-opcua))
 - Siemens S7 ([documentation for this node](https://flows.nodered.org/node/node-red-contrib-s7))
 - TCP/IP ([documentation for this node](https://flows.nodered.org/flow/bed6f676d088670d7e1bc298943338b5))
@@ -44,16 +45,19 @@ Furthermore, you will find under the general settings, the state logic which det
 - Modbus  ([documentation for this node](https://flows.nodered.org/node/node-red-contrib-modbus))
 - MQTT ([documentation for this node](https://cookbook.nodered.org/mqtt/))
 
-**Interaction with sensorconnect (Plug and Play connection of IO-Link Senosors):**
+The following describes how to use these data sources/nodes using the OPC/UA node as an example. 
 
-With the help of Sensorconnect, different sensors can be connected quickly and easily via an IFM gateway. The sensor values are automatically extracted from the software stack and made available via [MQTT](http://www.steves-internet-guide.com/mqtt-works/).
+## United Manufacturing Hubs sensorconnect
+One type of data source is the sensorconnect software package from the United Manufacturing Hub, which can be used to connect and read out IO-Link sensors quickly and easily.
+
+Here, values from IO-Link sensors are read out with the help of an IO-Link gateway and then made available via [MQTT](http://www.steves-internet-guide.com/mqtt-works/).
 
 To get a quick and easy overview of the available MQTT messages and topics we recommend the [MQTT Explorer](http://mqtt-explorer.com/). If you don't want to install any extra software you can use the MQTT-In node to subscribe to all available topics by subscribing to  `#` and then direct the messages of the MQTT in nodes into a debugging node. You can then display the messages in the nodered debugging window and get information about the topic and available data points.
 
 
 Topic structure: `ia/raw/<transmitterID>/<gatewaySerialNumber>/<portNumber>/<IOLinkSensorID>`
 
-#### Example for ia/raw/
+**Example for ia/raw/**
 
 Topic: `ia/raw/2020-0102/0000005898845/X01/210-156`
 
@@ -66,40 +70,76 @@ This means that the transmitter with the serial number `2020-0102` has one ifm g
 }
 ```
 
+## How to use data sources in concrete terms: 
 
-### Extract information and make it available to the **outputs**:
-In order for the data to be processed easily and quickly by the United Manufacturing hub, the input data (OPC/UA, Siemens S7) must be prepared and converted into a standardized data format (MQTT Topic). For a deep explanation of our MQTT data model check [here](../../concepts/mqtt/) and [here](../../concepts/state).
+### Example 1: Use of MQTT and sensorconnect (among other things for retrofitting)
 
-{{< imgproc nodered_outputs Fit "800x800" >}}{{< /imgproc >}}
+**Step 1: Connect sensors and gateways to the Factorycube/Edge PC**
 
-The 4 most important data points:
-- Information whether the machine is running or not: `/activity`
-- Information about anomalies or concrete reasons for a machine standstill: `/detectedAnomaly`
-- The produced quantity: `/count`
-- An interface to communicate any process value to the system (e.g. temperature or energy consumption) - `/processvalue`
+Connect an IO-Link sensor to an IFM IoT/IO-Link Gatway (e.g. Al1350, Al1352).
+Connect the IO-Link gateway to the edge PC on which the factorycube edge stack is installed. Make sure that the IO-Link gateway has an IP address via DHCP that matches the IP address range of the helm values.yaml file.
 
-Using the information from the topics `/activtiy` and `/detectedAnomaly` the statelogic node calculates the discrete machine state. By first checking if the machine is running or not. If the machine is not running the machine state is set equal to the last `/detectedAnomaly` analogous to [state model](../../concepts/state). The discrete machine state is then made available again via the `/state` topic.
+**Step 2: Connect to an MQTT Broker with the help of the MQTT Explorer**
 
-**Implementation example: You would like to determine the output and machine condition of a filling machine.**
+In the second step you should connect to the MQTT broker from which you want to pull the data and get an overview of the available data points.
 
-Used Sensors:
-- Lightbarrier for counting the bottles 
-- A button bar via which the machine operator can inform the system that he is on break, for example
+**Step 3: Identify the topic and the information you want to extract**
 
-1.  Extract via the MQTT in node the information of the light barrier whether a bottle was produced. If a bottle was produced send a message to the output/count topic analog to [MQTT datamodel](../../concepts/mqtt).
-2.  Use the output_to_activity node to use the information "a bottle was produced" to determine the information "the machine is running". E.g. If every X seconds a bottle is produced set the activity equal to true analog to [MQTT datamodel](../../concepts/mqtt/).
-3.  Use the information of the button bar to tell the system why the machine is not running. e.g. Whenever button 3 is pressed send pause to the detectedAnomaly node analog to [MQTT datamodel](../../concepts/mqtt).
+ As an end result you should have 2 things, 1. the MQTT topic under which the data you are interested in is sent, 2. the "key" within the JSON you are interested in, such as the temperature.
+ 
+**Step 4: Connect to the MQTT broker within Node-RED**
 
-Now the machine status is automatically determined and communicated to the united manufacturing hub for further analysis. Like for example the speed loss.
+**Step 5: Extract the information relevant to you from the message**
 
-TODO: #63 add example Flow for data processing
-### Testing:
+ToDo: Add Picture and Example Flow
+### Example 2: Use of OPC/UA
 
-{{< imgproc nodered_testing Fit "800x800" >}}{{< /imgproc >}}
-With the help of the testing flows you can test your entire system or simply simulate some sample data for visualization.
+**Step 1: Connect to the OPC/UA endpoint using UA-Expert**
 
-[See also DCC Aachen example in our showcase.](../../examples/dcc-assembly-analytics)
+First of all: [Here](http://documentation.unified-automation.com/uaexpert/1.4.0/html/first_steps.html) is a guide on how to use UA-Expert.
 
-## 2. Create dashboards using factorycube-server
 
-TODO
+
+**Step 2: Identify the tag/data point you want to extract using UA-Expert**
+
+**Step 3: Connect to the OPC/UA endpoint within Node-RED**
+
+**Step 4: Extract the information relevant to you from the message**
+
+ToDo: Add Picture and Example Flow
+# Connect machines
+# 1. How to determine the machine status and thus enable a performance management dashboard.
+
+In order to calculate the OEE and other KPIs, the system needs the following information:
+- When is the machine running, when is it not running and if the machine is not running, information on why it is not running.
+- When are productive times (shifts scheduled)
+- Optional: How much is produced.
+
+Based on this information, the United Manufacturing Hub determines the machine-relevant key figures and then serves them via a backend.
+
+Our standard flow is always a good starting point and you can find it [here](https://github.com/united-manufacturing-hub/united-manufacturing-hub/blob/b16dec6e6b4ec076b87c26e88f647a6385ac0ca4/deployment/factorycube-edge/values.yaml#L58) (formatted as JSON):  
+
+**Important information before you start**
+
+- 
+-
+-
+-
+
+## How to tell if the machine is running, when it is not running and if not, information about why it is not running.
+The target variable to be determined is the current state of the machine, the topic "/state". To make this easier to calculate, we have the two connectors "activity" and "detectedAnnomaly" as auxiliary variables. However, according to our data model, messages can also be written directly into the topic /state and the topics /activity and /detectedAnnomaly can be ignored.
+
+**In the following, we will describe the path via the auxiliary variables /activity and /detectedAnomaly to determine the /state of the machine.**
+
+### Connector /activity: Is the machine running or not:
+
+## How to determine when when are productive times (shifts scheduled):
+
+## Optional: How to determine how much is produced:
+
+# 2. Display process values in the dashboard and make them available to the information system
+Important the Topic /processValue Topic and the processValue node accepts only integer or float as data type
+
+
+# Create dashboards
+
