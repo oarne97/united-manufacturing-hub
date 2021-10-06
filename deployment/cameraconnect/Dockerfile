@@ -1,10 +1,10 @@
-FROM python:3.6-slim-buster
+FROM python:3.8-slim-buster
 
 WORKDIR /app
 
 # Install requirements
-COPY ./cameraconnect/requirements.txt ./
-RUN pip install -r ./requirements.txt --no-cache-dir
+COPY ./cameraconnect/requirements.txt /app
+RUN pip install -r /app/requirements.txt --no-cache-dir
 
 #necessary for GenICam Cameras manufactured by Allied Vision
 RUN apt-get update -y && \

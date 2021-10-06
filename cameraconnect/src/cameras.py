@@ -11,6 +11,7 @@ The module provides two classes:
 
 # Import python in-built libraries
 import logging
+import re
 from abc import ABC, abstractmethod
 import time
 import base64
@@ -31,8 +32,9 @@ from genicam.gentl import TimeoutException
 from genicam.genapi import OutOfRangeException
 from harvesters.core import Harvester
 
-#Console Style elements for outpu
-HORIZONTAL_CONSOLE_LINE = "\n"+"_"*80+"\n"
+# Console Style elements for outpu
+HORIZONTAL_CONSOLE_LINE = "\n" + "_" * 80 + "\n"
+
 
 class CamGeneral(ABC):
     """
@@ -127,11 +129,11 @@ class CamGeneral(ABC):
         prepared_message = {
             'timestamp_ms': timestamp_ms,
             'image':
-                {'image_id':(str(self.mac_address)+"_"+str(timestamp_ms)),
-                'image_bytes': encoded_image,
-                'image_height': image.shape[0],
-                'image_width': image.shape[1],
-                'image_channels': image.shape[2]},
+                {'image_id': (str(self.mac_address) + "_" + str(timestamp_ms)),
+                 'image_bytes': encoded_image,
+                 'image_height': image.shape[0],
+                 'image_width': image.shape[1],
+                 'image_channels': image.shape[2]},
         }
 
         # Get json formatted string, convert python object into
@@ -337,7 +339,8 @@ class GenICam(CamGeneral):
                          mqtt_port=mqtt_port,
                          mqtt_topic=mqtt_topic,
                          mac_address=mac_address)
-
+        logging.debug("-" * 80)
+        logging.debug(f"initialised {super()} with {mqtt_host} {mqtt_port} {mqtt_topic} {mac_address}")
         self.gen_tl_producer_path_list = gen_tl_producer_path_list
         self.user_set_selector = user_set_selector
         self.image_width = image_width
@@ -355,6 +358,8 @@ class GenICam(CamGeneral):
         self._connect()
 
         # Apply configurations
+        logging.debug("#" * 31 + "applying settings" + "#" * 32)
+
         self._apply_settings()
 
         # Start acquisition
@@ -375,7 +380,7 @@ class GenICam(CamGeneral):
         self.h = Harvester()
 
         # Add path of GenTL Producer
-        #self.h.add_file(self.gen_tl_producer_path)
+        # self.h.add_file(self.gen_tl_producer_path)
 
         for path in self.gen_tl_producer_path_list:
             self.h.add_file(path)
@@ -405,23 +410,42 @@ class GenICam(CamGeneral):
         # If multiple cameras in device list, choose the right
         #   one by changing the list_index or by using another
         #   argument
-
+        first = True  # in case one camera is detected multiple times
+        self.__remove_duplicate_entry_from_harvester()
+        object_identifier = self.__id_processing(str(self.mac_address))
         for camera in self.h.device_info_list:
-            #read cameras mac address
-            #ATTENTION: only works with BAUMER SDK
-            device_mac_address = str(camera.id_).replace("_","").replace("devicemodul","")
-            if device_mac_address.upper() == self.mac_address.upper().replace(":",""):
+            # read cameras mac address
+            # ATTENTION: only works with CTI files that deliver the MAC address to harvesters BAUMER SDK
+            camera_identifier = self.__id_processing(camera.id_)
+            logging.debug(
+                f"current device_mac_address: {camera_identifier}, {object_identifier}")
+
+            if not first:
+                logging.warning(f"camera {camera} with ident: {camera_identifier} is not first one matching the target "
+                              f"id: {self.mac_address}  |"
+                              f" ident: {object_identifier}, skipping")
+                continue  # using continue instead of break to preserve debug output
+
+            if camera_identifier.find(object_identifier) != -1:
                 try:
+                    logging.debug(f"attempting to connect to device {camera.id_} ident :{camera_identifier}")
                     self.ia = self.h.create_image_acquirer(id_=camera.id_)
-                except:
-                    logging.error("Camera ist not reachable. Most likely another container already occupies the same camera. One camera can only be used by exactly one container at the time.")
+                    first = False
+                except Exception as _e:
+                    logging.error(
+                        "Camera is not reachable. Most likely another container already occupies the same camera. "
+                        f"One camera can only be used by exactly one container at any time. {_e}")
                     sys.exit("Camera not reachable.")
-                logging.debug("Using:" + str(camera))
+                logging.debug(f"Using: {camera} with ident {camera_identifier}")
                 logging.debug(HORIZONTAL_CONSOLE_LINE)
 
         if not hasattr(self, "ia"):
-            logging.error("No camera with the specified MAC address available. Please specify MAC address in env file correctly.")
-            sys.exit("Invalid MAC address.")
+            logging.error(
+                "No camera with the specified MAC address available. Please specify MAC address in env file correctly.")
+            logging.info(f"attempted to connect to cameras: "
+                         f"{[(camera.id_, self.__id_processing(str(camera.id_))) for camera in self.h.device_info_list]}"
+                         f"this object has mac_address {self.mac_address} and ident: {object_identifier}")
+            sys.exit("Unknown or Invalid MAC address.")
         ## Set some default settings
         # This is required because of a bug in the harvesters
         #   module. This should not affect our usage of image
@@ -432,7 +456,38 @@ class GenICam(CamGeneral):
         #   acquisition process. The buffers will be announced
         #   to the target GenTL Producer. Need this so that we
         #   always get the correct actual image.
-        self.ia.num_buffers = 1
+        self.ia.num_buffers = 3  # test for stemmer imaging todo
+
+    @classmethod
+    def __id_processing(cls, identifier: str) -> str:
+        """
+        helper func to unify pre processing of identifier / mac addresses to ensure compatibility with different CTI
+        Files, this is not exhaustive, so if you find can not use your hardware with these expressions please create an
+        issue on github
+        :params:
+        identifier: str : input string
+        :return:
+        string capitalized with different things removed.
+        """
+        upper_id = identifier.upper()
+        device = re.compile("(DEVICEMODULE?)|(DEV)")  # removes common pre/suffixes
+        no_dev_id = device.sub("", upper_id)
+        spacer_symbols = re.compile("[-.:,;_\s]")  # removes variable spacers used on different cameras
+        no_spacer_symbols = spacer_symbols.sub("",no_dev_id)
+        return no_spacer_symbols
+
+    def __remove_duplicate_entry_from_harvester(self):
+        """
+        removes duplicate entries from the harvester camera list,
+        required for stemmer imaging under widows with alied vision cameras, probably also for others
+        """
+        new_list = []
+        for d in self.h.device_info_list:
+            if any([n_d.id_ == d.id_ for n_d in new_list]):
+                continue
+            else:
+                new_list.append(d)
+        self.h._device_info_list = new_list
 
     def _apply_settings(self) -> None:
         """
@@ -507,6 +562,7 @@ class GenICam(CamGeneral):
             self.ia.remote_device.node_map.PixelFormat.value = self.pixel_format
 
         # Set Exposure time
+        logging.debug(f"exposure auto :{self.exposure_auto} , exposure time {self.exposure_time}")
         if self.exposure_auto is not None:
             try:
                 self.ia.remote_device.node_map.ExposureTimeAbs.value = self.exposure_time
@@ -548,7 +604,6 @@ class GenICam(CamGeneral):
         self.ia.start_acquisition()
         logging.debug("Acquisition started.")
 
-
     # Get image out of image stream
     def get_image(self) -> None:
         """
@@ -563,6 +618,7 @@ class GenICam(CamGeneral):
         """
         # Try to fetch a buffer that has been filled up with an
         #   image
+        logging.debug("#" * 36 + "get image" + "#" * 35)
         try:
             # Default value
             retrieved_image = None
@@ -574,6 +630,7 @@ class GenICam(CamGeneral):
             with self.ia.fetch_buffer(timeout=20) as buffer:
                 # Do not use this buffer, use the next one
                 pass
+                logging.debug(f"buffer {buffer}")
 
             # Due to with statement buffer will automatically be
             #   queued
@@ -671,14 +728,14 @@ class GenICam(CamGeneral):
 
         logging.debug("Disconnected from GenICam camera.")
 
+
 class DummyCamera(CamGeneral):
 
     def get_image(self) -> None:
-
         # Default value
         retrieved_image = None
 
-        #reads a static image which is part of stack
+        # reads a static image which is part of stack
         img = cv2.imread("/app/assets/dummy_image.jpg")
         logging.debug(HORIZONTAL_CONSOLE_LINE)
         logging.debug("Image fetched.")
@@ -699,4 +756,3 @@ class DummyCamera(CamGeneral):
             cv2.imwrite(img_save_dir, retrieved_image)
 
             logging.debug("Image saved to {}".format(img_save_dir))
-
